@@ -1,0 +1,8 @@
+{
+  "name": "techcell-os",
+  "version": "1.0.0",
+  "description": "TechCell OS - gestão de ordens de serviço (protótipo acadêmico)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "^4.19.2" }
+}

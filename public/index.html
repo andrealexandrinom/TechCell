@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TechCell OS</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  :root { --bs-primary: #0d6efd; --bs-primary-rgb: 13,110,253; }
+  body { background: #f4f6f9; }
+  .navbar { background: #12263f; }
+  .card-num { font-size: 2rem; font-weight: 700; }
+  @media print { .no-print { display: none !important; } }
+</style>
+</head>
+<body>
+<nav class="navbar navbar-dark no-print">
+  <div class="container">
+    <a class="navbar-brand" href="#" onclick="go('painel');return false">📱 TechCell OS</a>
+    <div id="menu" class="d-flex align-items-center gap-2"></div>
+  </div>
+</nav>
+<main class="container py-4" id="app"></main>
+
+<script>
+const $ = s => document.querySelector(s);
+const app = $('#app');
+let sessao = JSON.parse(localStorage.getItem('sessao') || 'null');
+let STATUS = [];
+const cor = { 'Recebido':'secondary','Em diagnóstico':'info','Aguardando aprovação':'warning','Em reparo':'primary','Pronto para retirada':'success','Entregue':'dark','Devolvido ao cliente':'dark' };
+const badge = s => `<span class="badge text-bg-${cor[s]||'secondary'}">${s}</span>`;
+const brl = v => Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const data = d => new Date(d).toLocaleString('pt-BR');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const alerta = (m, t='danger') => `<div class="alert alert-${t} py-2">${esc(m)}</div>`;
+
+async function api(url, metodo='GET', corpo) {
+  const r = await fetch(url, { method: metodo, headers: { 'Content-Type':'application/json', ...(sessao ? { Authorization: 'Bearer '+sessao.token } : {}) }, body: corpo ? JSON.stringify(corpo) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && sessao) { sair(); }
+  if (!r.ok) throw new Error(j.erro || 'Erro inesperado.');
+  return j;
+}
+function sair() { localStorage.removeItem('sessao'); sessao = null; go('login'); }
+
+function menu() {
+  $('#menu').innerHTML = sessao ? `
+    <span class="text-white-50 small d-none d-sm-inline">${esc(sessao.nome)} (${sessao.perfil})</span>
+    ${sessao.perfil==='Administrador' ? '<button class="btn btn-sm btn-outline-light" onclick="go(\'relatorio\')">Relatório</button>' : ''}
+    <a class="btn btn-sm btn-outline-light" href="consulta.html" target="_blank">Consulta cliente</a>
+    <button class="btn btn-sm btn-light" onclick="sair()">Sair</button>` : '';
+}
+
+async function go(tela, arg) {
+  if (!STATUS.length) STATUS = await (await fetch('/api/status')).json();
+  if (!sessao) tela = 'login';
+  menu();
+  ({ login, painel, nova, detalhe, relatorio })[tela](arg);
+}
+
+// ---------- Login ----------
+function login() {
+  app.innerHTML = `<div class="row justify-content-center"><div class="col-md-5"><div class="card shadow-sm"><div class="card-body">
+    <h4 class="mb-3">Entrar</h4><div id="msg"></div>
+    <form id="f"><div class="mb-3"><label class="form-label">E-mail</label><input type="email" name="email" class="form-control" required></div>
+    <div class="mb-3"><label class="form-label">Senha</label><input type="password" name="senha" class="form-control" required></div>
+    <button class="btn btn-primary w-100">Entrar</button></form>
+    <hr><p class="small text-muted mb-0">Demo: admin@techcell.com / admin123<br>atendente@techcell.com / atend123<br>tecnico@techcell.com / tec123</p>
+    </div></div></div></div>`;
+  $('#f').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      const f = Object.fromEntries(new FormData(e.target));
+      sessao = await api('/api/auth/login','POST',f);
+      localStorage.setItem('sessao', JSON.stringify(sessao));
+      go('painel');
+    } catch (err) { $('#msg').innerHTML = alerta(err.message); }
+  };
+}
+
+// ---------- Painel ----------
+async function painel() {
+  app.innerHTML = '<p>Carregando...</p>';
+  const q = $('#busca')?.value || '', st = $('#fstatus')?.value || '';
+  const todas = await api('/api/os');
+  const conta = s => todas.filter(o => s.includes(o.status)).length;
+  const lista = todas.filter(o => (!st || o.status===st) && (!q || `${o.id} ${o.cliente} ${o.marca} ${o.modelo}`.toLowerCase().includes(q.toLowerCase())));
+  const cards = [['Recebidas',['Recebido','Em diagnóstico'],'secondary'],['Aguardando aprovação',['Aguardando aprovação'],'warning'],['Em reparo',['Em reparo'],'primary'],['Prontas p/ retirada',['Pronto para retirada'],'success']];
+  app.innerHTML = `<div class="row g-3 mb-4">${cards.map(c=>`<div class="col-6 col-md-3"><div class="card border-${c[2]}"><div class="card-body"><div class="text-muted small">${c[0]}</div><div class="card-num text-${c[2]}">${conta(c[1])}</div></div></div></div>`).join('')}</div>
+  <div class="d-flex gap-2 mb-3 flex-wrap">
+    <input id="busca" class="form-control" style="max-width:300px" placeholder="Buscar por nº, cliente ou aparelho" value="${esc(q)}">
+    <select id="fstatus" class="form-select" style="max-width:220px"><option value="">Todos os status</option>${STATUS.map(s=>`<option ${s===st?'selected':''}>${s}</option>`).join('')}</select>
+    ${['Atendente','Administrador'].includes(sessao.perfil) ? '<button class="btn btn-primary ms-auto" onclick="go(\'nova\')">+ Nova OS</button>' : ''}
+  </div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+    <thead><tr><th>OS</th><th>Cliente</th><th>Aparelho</th><th>Status</th><th>Entrada</th><th></th></tr></thead>
+    <tbody>${lista.map(o=>`<tr><td>#${o.id}</td><td>${esc(o.cliente)}</td><td>${esc(o.marca)} ${esc(o.modelo)}</td><td>${badge(o.status)}</td><td>${data(o.criado_em)}</td><td><button class="btn btn-sm btn-outline-primary" onclick="go('detalhe',${o.id})">Abrir</button></td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted">Nenhuma OS encontrada.</td></tr>'}</tbody></table></div></div>`;
+  $('#busca').oninput = $('#fstatus').onchange = () => { const b=$('#busca').value, s=$('#fstatus').value; painelFiltro(todas,b,s); };
+  $('#busca').focus();
+}
+function painelFiltro(todas, q, st) { // refiltra sem recarregar
+  const lista = todas.filter(o => (!st || o.status===st) && (!q || `${o.id} ${o.cliente} ${o.marca} ${o.modelo}`.toLowerCase().includes(q.toLowerCase())));
+  document.querySelector('tbody').innerHTML = lista.map(o=>`<tr><td>#${o.id}</td><td>${esc(o.cliente)}</td><td>${esc(o.marca)} ${esc(o.modelo)}</td><td>${badge(o.status)}</td><td>${data(o.criado_em)}</td><td><button class="btn btn-sm btn-outline-primary" onclick="go('detalhe',${o.id})">Abrir</button></td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted">Nenhuma OS encontrada.</td></tr>';
+}
+
+// ---------- Nova OS ----------
+function nova() {
+  app.innerHTML = `<h4>Nova ordem de serviço</h4><div id="msg"></div>
+  <form id="f" class="card card-body shadow-sm"><div class="row g-3">
+    <h6 class="mt-2">Cliente</h6>
+    <div class="col-md-6"><label class="form-label">Nome</label><input name="nome" class="form-control" required minlength="3"></div>
+    <div class="col-md-6"><label class="form-label">Telefone (com DDD)</label><input name="telefone" class="form-control" required placeholder="27999990000"></div>
+    <div class="col-md-4"><label class="form-label">CEP</label><div class="input-group"><input name="cep" class="form-control" maxlength="9"><button type="button" class="btn btn-outline-secondary" id="bcep">Buscar CEP</button></div></div>
+    <div class="col-md-8"><label class="form-label">Endereço</label><input name="endereco" class="form-control"></div>
+    <h6 class="mt-4">Aparelho</h6>
+    <div class="col-md-3"><label class="form-label">Tipo</label><select name="tipo" class="form-select" required><option>Celular</option><option>Tablet</option><option>Console</option><option>Computador</option></select></div>
+    <div class="col-md-3"><label class="form-label">Marca</label><input name="marca" class="form-control" required></div>
+    <div class="col-md-3"><label class="form-label">Modelo</label><input name="modelo" class="form-control" required></div>
+    <div class="col-md-3"><label class="form-label">IMEI / nº de série</label><input name="imei" class="form-control"></div>
+    <h6 class="mt-4">Atendimento</h6>
+    <div class="col-12"><label class="form-label">Defeito relatado</label><textarea name="defeito" class="form-control" rows="2" required minlength="10"></textarea></div>
+    <div class="col-12"><label class="form-label d-block">Estado de entrada</label>
+      ${['Tela trincada','Não liga','Com senha','Contato com líquido'].map(e=>`<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="estado" value="${e}"><label class="form-check-label">${e}</label></div>`).join('')}
+      <input name="outro" class="form-control mt-2" placeholder="Outro (opcional)"></div>
+  </div><div class="mt-4"><button class="btn btn-primary">Salvar e gerar protocolo</button> <button type="button" class="btn btn-link" onclick="go('painel')">Cancelar</button></div></form>`;
+  const f = $('#f');
+  $('#bcep').onclick = async () => {
+    const cep = f.cep.value.replace(/\D/g,'');
+    if (cep.length !== 8) return $('#msg').innerHTML = alerta('CEP não encontrado. Preencha o endereço manualmente.');
+    try {
+      const d = await (await fetch(`https://viacep.com.br/ws/${cep}/json/`)).json();
+      if (d.erro) throw 0;
+      f.endereco.value = `${d.logradouro}, ${d.bairro}, ${d.localidade}-${d.uf}`; $('#msg').innerHTML = '';
+    } catch { $('#msg').innerHTML = alerta('CEP não encontrado. Preencha o endereço manualmente.'); }
+  };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(f));
+    const estados = [...f.querySelectorAll('[name=estado]:checked')].map(x=>x.value); if (v.outro) estados.push(v.outro);
+    try {
+      const r = await api('/api/os','POST',{ cliente:{nome:v.nome,telefone:v.telefone,cep:v.cep,endereco:v.endereco}, aparelho:{tipo:v.tipo,marca:v.marca,modelo:v.modelo,imei:v.imei}, defeito:v.defeito, estado_entrada:estados.join(', ') });
+      app.innerHTML = `<div class="card card-body text-center"><h4>OS #${r.id} aberta com sucesso!</h4><p>Protocolo: <b>${r.id}</b></p>
+        <div class="no-print"><button class="btn btn-outline-secondary" onclick="comprovante(${r.id})">Imprimir comprovante</button> <button class="btn btn-primary" onclick="go('painel')">Voltar ao painel</button></div></div>`;
+    } catch (err) { $('#msg').innerHTML = alerta(err.message); window.scrollTo(0,0); }
+  };
+}
+async function comprovante(id) {
+  const o = await api('/api/os/'+id);
+  app.innerHTML = `<div class="card card-body"><h4>TechCell – Comprovante de entrada</h4><hr>
+   <p><b>Protocolo:</b> ${o.id} &nbsp; <b>Data:</b> ${data(o.criado_em)}</p><p><b>Cliente:</b> ${esc(o.cliente)} – ${esc(o.telefone)}</p>
+   <p><b>Aparelho:</b> ${esc(o.tipo)} ${esc(o.marca)} ${esc(o.modelo)} ${o.imei?'(IMEI/Série: '+esc(o.imei)+')':''}</p>
+   <p><b>Defeito:</b> ${esc(o.defeito)}</p><p><b>Estado de entrada:</b> ${esc(o.estado_entrada)||'-'}</p>
+   <p class="mt-5">______________________________<br>Assinatura do cliente</p>
+   <div class="no-print"><button class="btn btn-primary" onclick="window.print()">Imprimir</button> <button class="btn btn-link" onclick="go('painel')">Voltar</button></div></div>`;
+}
+
+// ---------- Detalhe ----------
+async function detalhe(id) {
+  const o = await api('/api/os/'+id);
+  const final = ['Entregue','Devolvido ao cliente'].includes(o.status);
+  const perfil = sessao.perfil, adm = perfil==='Administrador';
+  const podeItem = (adm || perfil==='Técnico') && !final;
+  const podeAprov = (adm || perfil==='Atendente') && !final;
+  const tel = '55' + o.telefone;
+  const wa = txt => `https://wa.me/${tel}?text=${encodeURIComponent(txt)}`;
+  const msgOrc = `Olá, ${o.cliente}! O orçamento do seu ${o.marca} ${o.modelo} (OS #${o.id}) ficou em ${brl(o.total)}. Podemos aprovar o reparo?`;
+  const msgPronto = `Olá, ${o.cliente}! Seu ${o.marca} ${o.modelo} (OS #${o.id}) está pronto para retirada na TechCell.`;
+  app.innerHTML = `<button class="btn btn-link px-0" onclick="go('painel')">← Voltar</button>
+  <div id="msg"></div>
+  <div class="d-flex align-items-center gap-2 mb-3"><h4 class="mb-0">OS #${o.id}</h4>${badge(o.status)} ${final?'<span class="text-muted small">(somente leitura)</span>':''}</div>
+  <div class="row g-3"><div class="col-lg-7">
+    <div class="card mb-3"><div class="card-body"><h6>Dados</h6>
+      <p class="mb-1"><b>Cliente:</b> ${esc(o.cliente)} – ${esc(o.telefone)}</p><p class="mb-1"><b>Aparelho:</b> ${esc(o.tipo)} ${esc(o.marca)} ${esc(o.modelo)}</p>
+      <p class="mb-1"><b>Defeito:</b> ${esc(o.defeito)}</p><p class="mb-0"><b>Estado de entrada:</b> ${esc(o.estado_entrada)||'-'}</p></div></div>
+    <div class="card"><div class="card-body"><h6>Orçamento</h6>
+      <table class="table table-sm"><thead><tr><th>Tipo</th><th>Descrição</th><th>Qtd</th><th>Valor</th></tr></thead><tbody>
+      ${o.itens.map(i=>`<tr><td>${i.tipo}</td><td>${esc(i.descricao)}</td><td>${i.quantidade}</td><td>${brl(i.valor)}</td></tr>`).join('') || '<tr><td colspan="4" class="text-muted">Sem itens.</td></tr>'}
+      </tbody><tfoot><tr><th colspan="3" class="text-end">Total</th><th>${brl(o.total)}</th></tr></tfoot></table>
+      ${podeItem ? `<form id="fi" class="row g-2 mb-3"><div class="col-3"><select name="tipo" class="form-select form-select-sm"><option>Serviço</option><option>Peça</option></select></div>
+        <div class="col-4"><input name="descricao" class="form-control form-control-sm" placeholder="Descrição" required></div>
+        <div class="col-2"><input name="quantidade" type="number" min="1" value="1" class="form-control form-control-sm"></div>
+        <div class="col-3"><input name="valor" type="number" step="0.01" min="0" class="form-control form-control-sm" placeholder="Valor" required></div>
+        <div class="col-12"><button class="btn btn-sm btn-outline-primary">Adicionar item</button></div></form>` : ''}
+      <p class="mb-2">Aprovação do cliente: <b>${o.aprovado===1?'✅ Aprovado em '+data(o.aprovado_em):o.aprovado===0?'❌ Recusado em '+data(o.aprovado_em):'Pendente'}</b></p>
+      <a class="btn btn-sm btn-success ${o.itens.length?'':'disabled'}" target="_blank" href="${wa(msgOrc)}">Enviar orçamento (WhatsApp)</a>
+      ${podeAprov ? '<button class="btn btn-sm btn-outline-success" id="ap">Registrar aprovação</button> <button class="btn btn-sm btn-outline-danger" id="rc">Registrar recusa</button>' : ''}
+    </div></div></div>
+  <div class="col-lg-5">
+    ${final ? '' : `<div class="card mb-3"><div class="card-body"><h6>Atualizar status</h6><form id="fs">
+      <select name="status" class="form-select mb-2">${STATUS.map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select>
+      <input name="observacao" class="form-control mb-2" placeholder="Observação interna">
+      <button class="btn btn-primary btn-sm">Atualizar</button></form>
+      ${o.status==='Pronto para retirada' ? `<a class="btn btn-success btn-sm mt-2" target="_blank" href="${wa(msgPronto)}">Avisar cliente (WhatsApp)</a>` : ''}</div></div>`}
+    <div class="card"><div class="card-body"><h6>Histórico</h6><ul class="list-group list-group-flush">
+      ${o.historico.map(h=>`<li class="list-group-item px-0"><div>${badge(h.status)} <span class="small text-muted">${data(h.data)} – ${esc(h.usuario)}</span></div><div class="small">${esc(h.observacao)}</div></li>`).join('')}</ul></div></div>
+  </div></div>`;
+  const tenta = async fn => { try { await fn(); } catch (e) { $('#msg').innerHTML = alerta(e.message); window.scrollTo(0,0); } };
+  if ($('#fi')) $('#fi').onsubmit = e => { e.preventDefault(); const v = Object.fromEntries(new FormData(e.target)); tenta(async()=>{ await api(`/api/os/${id}/itens`,'POST',{...v,quantidade:+v.quantidade,valor:+v.valor}); detalhe(id); }); };
+  if ($('#fs')) $('#fs').onsubmit = e => { e.preventDefault(); tenta(async()=>{ await api(`/api/os/${id}/status`,'PATCH',Object.fromEntries(new FormData(e.target))); detalhe(id); }); };
+  if ($('#ap')) { $('#ap').onclick = () => tenta(async()=>{ await api(`/api/os/${id}/aprovacao`,'POST',{aprovado:true}); detalhe(id); }); $('#rc').onclick = () => tenta(async()=>{ await api(`/api/os/${id}/aprovacao`,'POST',{aprovado:false}); detalhe(id); }); }
+}
+
+// ---------- Relatório ----------
+async function relatorio() {
+  app.innerHTML = `<h4>Relatório de OS por status</h4><form id="f" class="row g-2 mb-3 no-print"><div class="col-auto"><input type="date" name="de" class="form-control"></div><div class="col-auto"><input type="date" name="ate" class="form-control"></div><div class="col-auto"><button class="btn btn-primary">Filtrar</button> <button type="button" class="btn btn-outline-secondary" onclick="window.print()">Imprimir</button></div></form><div id="r"></div>`;
+  const carrega = async () => {
+    const v = new URLSearchParams(new FormData($('#f')));
+    const r = await api('/api/relatorio?'+v);
+    $('#r').innerHTML = `<table class="table table-sm bg-white" style="max-width:420px"><thead><tr><th>Status</th><th>Quantidade</th></tr></thead><tbody>${r.map(x=>`<tr><td>${badge(x.status)}</td><td>${x.qtd}</td></tr>`).join('') || '<tr><td colspan="2">Sem dados.</td></tr>'}</tbody><tfoot><tr><th>Total</th><th>${r.reduce((a,x)=>a+x.qtd,0)}</th></tr></tfoot></table>`;
+  };
+  $('#f').onsubmit = e => { e.preventDefault(); carrega(); };
+  carrega();
+}
+
+go('painel');
+</script>
+</body>
+</html>
